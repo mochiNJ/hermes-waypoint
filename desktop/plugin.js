@@ -49,7 +49,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 
 export const ID = 'waypoint' // never change: storage is namespaced by it
-export const VERSION = '2.0.0'
+export const VERSION = '2.1.0'
+// Build flag: the local install turns AI suggestions on for tracked sessions; public builds
+// ship with them off until the user opts in (they send an excerpt to the auxiliary model).
+export const DEFAULT_AI = 'off'
 const ROUTE = '/session-status'
 const DAY = 24 * 60 * 60 * 1000
 const CHECK_MS = 60 * 1000
@@ -66,6 +69,7 @@ export const DEFAULT_SETTINGS = {
   hideUnset: false, // grey bars only on hover
   staleDays: 7, // Working/Waiting untouched this long = "stale"
   banner: true, // "where you stopped" strip above the composer
+  aiSuggest: DEFAULT_AI, // 'off' | 'tracked' | 'all' — automatic AI next-step suggestions
   digest: true, // one morning summary toast per day
   labels: { wip: '', waiting: '', done: '' } // custom names ('' = default)
 }
@@ -114,9 +118,22 @@ export function normalise(raw = {}) {
   settings.hideUnset = !!settings.hideUnset
   settings.banner = settings.banner !== false
   settings.digest = settings.digest !== false
+  if (!['off', 'tracked', 'all'].includes(settings.aiSuggest)) settings.aiSuggest = DEFAULT_AI
   const skipped = Array.isArray(raw.skipped) ? raw.skipped.filter(x => typeof x === 'string') : []
   const digestDay = typeof raw.digestDay === 'string' ? raw.digestDay : ''
-  return { statuses, waits, meta, settings, skipped, digestDay }
+  const suggest = {}
+  for (const [id, v] of Object.entries(raw.suggest || {})) {
+    const items = cleanSuggestions(v && v.items)
+    if (items.length) {
+      suggest[id] = {
+        items,
+        source: v.source === 'ai' ? 'ai' : 'quick',
+        at: Number.isFinite(v.at) ? v.at : 0,
+        msgCount: Number.isFinite(v.msgCount) ? v.msgCount : 0
+      }
+    }
+  }
+  return { statuses, waits, meta, settings, skipped, digestDay, suggest }
 }
 
 function clampInt(v, lo, hi, dflt) {
@@ -174,6 +191,121 @@ export function counts(snap, now = Date.now()) {
     if (isStale(snap, id, now)) c.stale++
   }
   return c
+}
+
+// ---- next-step suggestions (pure) -------------------------------------------
+
+export const SUGGEST_INSTRUCTIONS = "You suggest what the user should do next in a work session with an AI assistant.\nRead the session title, the user's own status notes and the conversation excerpt.\nReply with ONLY a JSON array of exactly 3 objects, no markdown and no other text:\n[{\"title\": \"...\", \"why\": \"...\", \"prompt\": \"...\"}]\n- title: a short imperative action, at most 8 words.\n- why: one short reason, at most 18 words.\n- prompt: the exact message the user could send to the assistant to start it, written by the user in first person, at most 40 words.\nMake the three different: (1) the most natural next step, (2) a check, test or loose end, (3) one bigger move forward.\nPrefer things the assistant offered to do, questions it asked, or decisions still open. Never suggest something already done.\nWrite in the language the user writes in."
+
+const clip = (v, n) => {
+  const t = String(v ?? '').replace(/\s+/g, ' ').trim()
+  return t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t
+}
+
+/** Validate/trim suggestion objects; at most 3, titles unique. */
+export function cleanSuggestions(list) {
+  if (!Array.isArray(list)) return []
+  const out = []
+  const seen = new Set()
+  for (const x of list) {
+    if (!x || typeof x !== 'object') continue
+    const title = clip(x.title, 70)
+    if (!title || seen.has(title.toLowerCase())) continue
+    seen.add(title.toLowerCase())
+    out.push({ title, why: clip(x.why, 160), prompt: clip(x.prompt || x.title, 400) })
+    if (out.length === 3) break
+  }
+  return out
+}
+
+/** Parse a model reply into suggestions (tolerates fences / prose around the JSON). */
+export function parseSuggestions(text) {
+  const raw = String(text || '')
+  const a = raw.indexOf('[')
+  const b = raw.lastIndexOf(']')
+  if (a < 0 || b <= a) return []
+  try {
+    return cleanSuggestions(JSON.parse(raw.slice(a, b + 1)))
+  } catch {
+    return []
+  }
+}
+
+/** Text of a session.history message, whatever shape the gateway used. */
+export function messageText(m) {
+  if (!m || typeof m !== 'object') return ''
+  if (typeof m.text === 'string') return m.text
+  if (typeof m.content === 'string') return m.content
+  if (Array.isArray(m.content)) return m.content.map(p => (typeof p === 'string' ? p : p?.text || '')).join(' ')
+  return ''
+}
+
+/** Last user/assistant turns as a compact transcript (oldest first), bounded in size. */
+export function transcriptOf(messages, { maxMessages = 12, perMessage = 700, maxChars = 7000 } = {}) {
+  const turns = (Array.isArray(messages) ? messages : [])
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
+    .map(m => ({ role: m.role, text: messageText(m).trim() }))
+    .filter(m => m.text)
+    .slice(-maxMessages)
+  const lines = turns.map(m => `${m.role === 'user' ? 'USER' : 'ASSISTANT'}: ${clip(m.text, perMessage)}`)
+  let out = lines.join('\n')
+  while (out.length > maxChars && lines.length > 2) {
+    lines.shift()
+    out = lines.join('\n')
+  }
+  return out
+}
+
+export function suggestInput({ title, status, next, who, outcome, transcript }) {
+  const label = { none: 'Not tracked', wip: 'Working', waiting: 'Waiting on someone', done: 'Done' }[status] || 'Not tracked'
+  const lines = [`Session title: ${title || '(untitled)'}`, `Status: ${label}`]
+  if (next) lines.push(`User's note (next step): ${next}`)
+  if (who) lines.push(`Waiting on: ${who}`)
+  if (outcome) lines.push(`Outcome so far: ${outcome}`)
+  lines.push('', 'Conversation (oldest first, trimmed):', transcript || '(no messages yet)')
+  return lines.join('\n')
+}
+
+const OFFER_RE =
+  /(?:want me to|should i|shall i|do you want me to|i can also|i can|tell me (?:if|when) you want(?: me to)?|if you want,? i(?:'ll| will| can))\s+([^?.!\n]{6,140})/gi
+
+/** Free, instant suggestions from the last assistant message (offers it made), topped up by
+ *  status-based defaults. No model call. */
+export function quickSuggestions(messages, { status = 'none', who = '', t = k => k } = {}) {
+  const items = []
+  const last = [...(Array.isArray(messages) ? messages : [])].reverse().find(m => m && m.role === 'assistant' && messageText(m).trim())
+  if (last) {
+    const text = messageText(last).replace(/\*\*/g, '')
+    for (const m of text.matchAll(OFFER_RE)) {
+      let act = m[1].trim().replace(/^(to|please)\s+/i, '').replace(/[,;:]\s*$/, '')
+      act = act.replace(/\byou\b/gi, 'me').replace(/\byour\b/gi, 'my')
+      if (act.split(' ').length < 2) continue
+      const title = act.charAt(0).toUpperCase() + act.slice(1)
+      items.push({ title, why: t('sgOffered'), prompt: t('sgGoAhead', act) })
+      if (items.length >= 3) break
+    }
+  }
+  const defaults = {
+    none: ['sgSummarise', 'sgTest', 'sgPlan'],
+    wip: ['sgSummarise', 'sgTest', 'sgPlan'],
+    waiting: ['sgFollowUp', 'sgMeanwhile', 'sgSummarise'],
+    done: ['sgHandoff', 'sgReview', 'sgPlan']
+  }[status] || []
+  for (const k of defaults) {
+    if (items.length >= 3) break
+    items.push({ title: t(`${k}T`), why: t(`${k}W`), prompt: t(`${k}P`, who || t('waitingSomeone')) })
+  }
+  return cleanSuggestions(items)
+}
+
+/** Should an automatic AI refresh run for this session now? */
+export function aiDue({ mode, status, cached, msgCount, now = Date.now(), force = false }) {
+  if (mode === 'off') return false
+  if (mode === 'tracked' && (!status || status === 'none')) return false
+  if (force) return true
+  if (!cached || cached.source !== 'ai') return true
+  if (now - (cached.at || 0) < 90 * 1000) return false
+  return msgCount - (cached.msgCount || 0) >= 2
 }
 
 /** Local calendar day key, e.g. "2026-10-12". */
@@ -316,7 +448,53 @@ const EN = {
   dismiss: 'Dismiss',
   digestTitle: 'Today in Waypoint',
   digestMsg: c => `${c.wip} working${c.stale ? ` (${c.stale} stale)` : ''} · ${c.waiting} waiting${c.due ? ` (${c.due} due)` : ''}`,
-  openBoard: 'Open board'
+  openBoard: 'Open board',
+  // suggestions
+  sgHeader: 'Suggested next',
+  sgAi: 'AI',
+  sgQuick: 'Quick',
+  sgQuickTip: 'Instant ideas from this chat — no AI used.',
+  sgAiTip: 'Written by your auxiliary model from the latest messages.',
+  sgRefresh: 'Refresh suggestions',
+  sgThinking: 'Thinking of next steps…',
+  sgNone: 'No suggestions yet.',
+  sgOpenToRefresh: 'Open this session to refresh its suggestions.',
+  sgError: 'AI suggestions unavailable — showing quick ones.',
+  sgAsk: 'Ask',
+  sgAskTip: 'Put this message in the chat box (you press send).',
+  sgUse: 'Make it my next step',
+  sgEnableAi: 'Turn on AI suggestions',
+  sgEnableTip: 'Uses your auxiliary model (the one that writes session titles) with the last messages of the open session.',
+  sgBanner: 'Next:',
+  sgOffered: 'The assistant offered this.',
+  sgGoAhead: act => `Yes, please go ahead: ${act}.`,
+  sgSummariseT: 'Recap where we are',
+  sgSummariseW: 'A short recap makes the next step obvious.',
+  sgSummariseP: () => 'Give me a short recap: what is done, what is left, and the single best next step.',
+  sgTestT: 'Test what was just made',
+  sgTestW: 'Catch problems before moving on.',
+  sgTestP: () => 'Before we continue, test what you just made and tell me what works and what does not.',
+  sgPlanT: 'Plan the next 3 steps',
+  sgPlanW: 'Turns open ends into a short plan.',
+  sgPlanP: () => 'List the next 3 steps for this work in order, with what each one needs from me.',
+  sgFollowUpT: 'Draft the follow-up message',
+  sgFollowUpW: 'Make chasing them a one-minute job.',
+  sgFollowUpP: who => `Draft a short, polite follow-up message to ${who} asking for an update.`,
+  sgMeanwhileT: 'What can I do meanwhile?',
+  sgMeanwhileW: 'Keep moving while you wait.',
+  sgMeanwhileP: () => 'While we wait, what parts of this can we still move forward without them?',
+  sgHandoffT: 'Write a handoff summary',
+  sgHandoffW: 'Lets a fresh session pick up instantly.',
+  sgHandoffP: () => 'Write a short handoff summary of this session: goal, result, files, and anything left open.',
+  sgReviewT: 'Double-check the result',
+  sgReviewW: 'One last check before closing it.',
+  sgReviewP: () => 'Do a final check of the result and list anything we missed.',
+  sSuggest: 'AI next-step suggestions',
+  sSuggestOff: 'Off',
+  sSuggestTracked: 'Tracked sessions',
+  sSuggestAll: 'All sessions',
+  sSuggestNote: 'Sends the last messages of the open session to your auxiliary model (the one that writes session titles). Quick suggestions never leave your computer.',
+  boardIdea: s => `Idea: ${s}`
 }
 
 const AR = {
@@ -405,7 +583,52 @@ const AR = {
   dismiss: 'سكّر',
   digestTitle: 'اليوم بـ Waypoint',
   digestMsg: c => `${c.wip} شغّال${c.stale ? ` (${c.stale} قديم)` : ''} · ${c.waiting} بانتظار${c.due ? ` (${c.due} مستحق)` : ''}`,
-  openBoard: 'افتح اللوحة'
+  openBoard: 'افتح اللوحة',
+  sgHeader: 'اقتراحات للخطوة الجاية',
+  sgAi: 'AI',
+  sgQuick: 'سريع',
+  sgQuickTip: 'أفكار فورية من هالمحادثة — بلا AI.',
+  sgAiTip: 'كتبها الموديل المساعد من آخر الرسائل.',
+  sgRefresh: 'حدّث الاقتراحات',
+  sgThinking: 'عم فكّر بالخطوات الجاية…',
+  sgNone: 'ما في اقتراحات بعد.',
+  sgOpenToRefresh: 'افتح الجلسة لتحديث اقتراحاتها.',
+  sgError: 'اقتراحات AI مش متوفرة — هيدي السريعة.',
+  sgAsk: 'اسأل',
+  sgAskTip: 'بتحط الرسالة بمربع الكتابة (إنت بتبعت).',
+  sgUse: 'خلّيها خطوتي الجاية',
+  sgEnableAi: 'شغّل اقتراحات AI',
+  sgEnableTip: 'بيستعمل الموديل المساعد (يلي بيكتب عناوين الجلسات) مع آخر رسائل الجلسة المفتوحة.',
+  sgBanner: 'الجاي:',
+  sgOffered: 'المساعد عرض يعملها.',
+  sgGoAhead: act => `إي، كمّل: ${act}.`,
+  sgSummariseT: 'لخّص وين صرنا',
+  sgSummariseW: 'ملخص قصير بيوضّح الخطوة الجاية.',
+  sgSummariseP: () => 'عطيني ملخص قصير: شو خلص، شو باقي، وشو أحسن خطوة جاية.',
+  sgTestT: 'جرّب يلي انعمل',
+  sgTestW: 'التقط المشاكل قبل ما نكمّل.',
+  sgTestP: () => 'قبل ما نكمّل، جرّب يلي عملته وقلّي شو ماشي وشو لا.',
+  sgPlanT: 'خطّط لـ٣ خطوات جاية',
+  sgPlanW: 'بيحوّل الشغلات المفتوحة لخطة قصيرة.',
+  sgPlanP: () => 'عدّدلي ٣ خطوات جاية بالترتيب، وشو بدّك مني بكل وحدة.',
+  sgFollowUpT: 'اكتب رسالة متابعة',
+  sgFollowUpW: 'المتابعة بتصير شغلة دقيقة.',
+  sgFollowUpP: who => `اكتبلي رسالة متابعة قصيرة ومهذبة لـ ${who} نسأل فيها عن آخر الأخبار.`,
+  sgMeanwhileT: 'شو فيني اعمل هلّق؟',
+  sgMeanwhileW: 'كمّل شغل وإنت ناطر.',
+  sgMeanwhileP: () => 'ونحنا ناطرين، شو منقدر نكمّل من هالشغل بلاهن؟',
+  sgHandoffT: 'اكتب ملخص تسليم',
+  sgHandoffW: 'بيخلّي الجلسة الجديدة تكمّل فوراً.',
+  sgHandoffP: () => 'اكتب ملخص تسليم قصير لهالجلسة: الهدف، النتيجة، الملفات، وشو باقي مفتوح.',
+  sgReviewT: 'تأكد من النتيجة',
+  sgReviewW: 'تشييك أخير قبل ما نسكّرها.',
+  sgReviewP: () => 'اعمل تشييك أخير عالنتيجة وعدّدلي إذا في شي نسيناه.',
+  sSuggest: 'اقتراحات AI للخطوة الجاية',
+  sSuggestOff: 'مطفي',
+  sSuggestTracked: 'الجلسات المعلّمة',
+  sSuggestAll: 'كل الجلسات',
+  sSuggestNote: 'بيبعت آخر رسائل الجلسة المفتوحة للموديل المساعد (يلي بيكتب عناوين الجلسات). الاقتراحات السريعة ما بتطلع من كمبيوترك.',
+  boardIdea: s => `فكرة: ${s}`
 }
 
 // =====================================================================
@@ -418,7 +641,7 @@ const $titles = atom({}) // durable id -> title
 const $openCard = atom(null) // durable id whose card is open (one at a time)
 let ctxRef = null
 
-const KEYS = ['statuses', 'waits', 'meta', 'settings', 'skipped', 'digestDay']
+const KEYS = ['statuses', 'waits', 'meta', 'settings', 'skipped', 'digestDay', 'suggest']
 
 function load(ctx) {
   const raw = {}
@@ -611,6 +834,137 @@ function maybeDigest(now) {
   commit({ ...snap, digestDay: dayKey(now) })
 }
 
+// ---- next-step suggestions (runtime) ------------------------------------------
+
+const $sgBusy = atom({}) // durable id -> 'loading' | 'error'
+const sgLast = new Map() // durable id -> last attempt time (rate limit, per app run)
+
+function storeSuggestions(id, entry) {
+  const snap = $snap.get()
+  const suggest = { ...snap.suggest, [id]: entry }
+  // Keep the newest 200 sessions only.
+  const ids = Object.keys(suggest)
+  if (ids.length > 200) {
+    ids.sort((a, b) => (suggest[a].at || 0) - (suggest[b].at || 0))
+    for (const old of ids.slice(0, ids.length - 200)) delete suggest[old]
+  }
+  commit({ ...snap, suggest })
+}
+
+function setBusy(id, v) {
+  const b = { ...$sgBusy.get() }
+  if (v) b[id] = v
+  else delete b[id]
+  $sgBusy.set(b)
+}
+
+async function oneshot(input) {
+  const params = {
+    instructions: SUGGEST_INSTRUCTIONS,
+    input,
+    task: 'title_generation',
+    max_tokens: 700,
+    temperature: 0.4
+  }
+  // Never pass session_id: that would borrow the chat's (expensive) main model.
+  const profile = host.state.focusedSessionProfile?.get?.()
+  if (profile) params.profile = profile
+  const res = await host.request('llm.oneshot', params)
+  return typeof res === 'string' ? res : res?.text || ''
+}
+
+/** Refresh suggestions for the FOCUSED session (history needs its live runtime id). */
+async function refreshSuggestions({ force = false, allowAi = true } = {}) {
+  const id = host.state.focusedStoredSessionId?.get?.()
+  const runtime = host.state.focusedSessionId?.get?.()
+  if (!id || !runtime) return
+  const now = Date.now()
+  if (!force && now - (sgLast.get(id) || 0) < 4000) return
+  sgLast.set(id, now)
+  let messages = []
+  try {
+    const res = await host.request('session.history', { session_id: runtime })
+    messages = res?.messages || []
+  } catch {
+    return
+  }
+  if (!messages.length) return
+  const snap = $snap.get()
+  const status = snap.statuses[id] || 'none'
+  const meta = snap.meta[id] || {}
+  const who = snap.waits[id]?.who || ''
+  const t = T()
+  const cached = snap.suggest[id]
+  const msgCount = messages.length
+  const wantAi = allowAi && aiDue({ mode: snap.settings.aiSuggest, status, cached, msgCount, now, force })
+  const replaceQuick =
+    !cached ||
+    (cached.source === 'quick' && cached.msgCount !== msgCount) ||
+    (cached.source === 'ai' && snap.settings.aiSuggest === 'off' && cached.msgCount !== msgCount)
+  if (replaceQuick) {
+    const quick = quickSuggestions(messages, { status, who, t })
+    if (quick.length) storeSuggestions(id, { items: quick, source: 'quick', at: now, msgCount })
+  }
+  if (!wantAi) return
+  setBusy(id, 'loading')
+  try {
+    const input = suggestInput({
+      title: $titles.get()[id] || '',
+      status,
+      next: meta.next,
+      who,
+      outcome: meta.outcome,
+      transcript: transcriptOf(messages)
+    })
+    const items = parseSuggestions(await oneshot(input))
+    if (!items.length) throw new Error('empty')
+    storeSuggestions(id, { items, source: 'ai', at: Date.now(), msgCount })
+    setBusy(id, null)
+  } catch {
+    setBusy(id, 'error')
+  }
+}
+
+let sgTimer = null
+function scheduleRefresh(ms = 3000, opts) {
+  if (sgTimer) clearTimeout(sgTimer)
+  sgTimer = setTimeout(() => {
+    sgTimer = null
+    refreshSuggestions(opts)
+  }, ms)
+}
+
+async function askSuggestion(id, prompt) {
+  const focused = host.state.focusedStoredSessionId?.get?.()
+  if (focused !== id) {
+    openSession(id)
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 200))
+      if (host.state.focusedStoredSessionId?.get?.() === id) break
+    }
+    await new Promise(r => setTimeout(r, 300))
+  }
+  // Address the session's own composer (a stored id works); fall back to the active one.
+  await new Promise(r => setTimeout(r, 60))
+  for (const target of [id, host.state.focusedSessionId?.get?.(), null]) {
+    if (target === undefined) continue
+    try {
+      if (await host.composer.setDraft(target, prompt)) {
+        host.composer.focus(target)
+        return true
+      }
+    } catch {}
+  }
+  return false
+}
+
+function useAsNextStep(id, title) {
+  let snap = $snap.get()
+  if ((snap.statuses[id] || 'none') !== 'wip') snap = applyStatus(snap, id, 'wip')
+  const cur = snap.meta[id] || { setAt: Date.now(), next: '', outcome: '' }
+  commit({ ...snap, meta: { ...snap.meta, [id]: { ...cur, next: title } } })
+}
+
 // =====================================================================
 // UI
 // =====================================================================
@@ -685,6 +1039,153 @@ function StatusChips({ value, onPick, settings, t }) {
     )
   })
 }
+
+// ---- suggestions UI -----------------------------------------------------------
+
+function SmallButton({ onClick, children, title, primary, disabled, ...rest }) {
+  return jsx('button', {
+    type: 'button',
+    title,
+    disabled,
+    onClick: e => {
+      e.stopPropagation()
+      onClick?.(e)
+    },
+    className:
+      'inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[0.625rem] transition-colors hover:bg-(--chrome-action-hover) disabled:opacity-40' +
+      (primary ? ' text-foreground' : ' text-(--ui-text-secondary)'),
+    style: { borderColor: 'var(--ui-stroke-secondary)' },
+    ...rest,
+    children
+  })
+}
+
+function SuggestionList({ id, onAfter }) {
+  const t = usePluginI18n(ID)
+  const snap = useValue($snap)
+  const busy = useValue($sgBusy)[id]
+  const focused = useValue(host.state.focusedStoredSessionId) === id
+  const entry = snap.suggest[id]
+  const aiOff = snap.settings.aiSuggest === 'off'
+
+  useEffect(() => {
+    if (focused && !entry) refreshSuggestions({ allowAi: !aiOff })
+  }, [focused, !!entry])
+
+  const header = jsxs('div', {
+    className: 'flex items-center gap-1.5',
+    children: [
+      jsx(Codicon, { name: 'lightbulb', size: '0.75rem' }),
+      jsx('span', { className: 'font-medium text-foreground', children: t('sgHeader') }),
+      entry
+        ? jsx(Tip, {
+            label: entry.source === 'ai' ? t('sgAiTip') : t('sgQuickTip'),
+            children: jsx('span', {
+              'data-sg-source': entry.source,
+              className: 'rounded px-1 text-[0.5625rem] uppercase tracking-wide text-(--ui-text-tertiary)',
+              style: { border: '1px solid var(--ui-stroke-secondary)' },
+              children: entry.source === 'ai' ? t('sgAi') : t('sgQuick')
+            })
+          })
+        : null,
+      jsx('span', { className: 'flex-1' }),
+      busy === 'loading'
+        ? jsx('span', { className: 'animate-pulse text-[0.625rem] text-(--ui-text-tertiary)', children: t('sgThinking') })
+        : null,
+      jsx(Tip, {
+        label: focused ? t('sgRefresh') : t('sgOpenToRefresh'),
+        children: jsx('button', {
+          type: 'button',
+          'data-action': 'sg-refresh',
+          disabled: !focused || busy === 'loading',
+          onClick: e => {
+            e.stopPropagation()
+            refreshSuggestions({ force: true, allowAi: !aiOff })
+          },
+          className: 'rounded p-0.5 text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground disabled:opacity-40',
+          children: jsx(Codicon, { name: 'refresh', size: '0.75rem' })
+        })
+      })
+    ]
+  })
+
+  const items = entry?.items || []
+  return jsxs('div', {
+    'data-waypoint-suggestions': id,
+    className: 'flex flex-col gap-1.5 rounded-md p-2',
+    style: { border: '1px solid var(--ui-stroke-secondary)' },
+    children: [
+      header,
+      busy === 'error'
+        ? jsx('div', { className: 'text-[0.625rem] text-(--ui-text-quaternary)', children: t('sgError') })
+        : null,
+      items.length
+        ? items.map((it, i) =>
+            jsxs(
+              'div',
+              {
+                'data-sg-item': i,
+                dir: 'auto',
+                className: 'flex flex-col gap-0.5 rounded px-1 py-1 hover:bg-(--chrome-action-hover)',
+                children: [
+                  jsxs('div', {
+                    className: 'flex items-start gap-1.5',
+                    children: [
+                      jsx('span', { className: 'mt-px text-(--ui-text-quaternary)', children: `${i + 1}.` }),
+                      jsx('span', { className: 'min-w-0 flex-1 font-medium text-foreground', children: it.title })
+                    ]
+                  }),
+                  it.why ? jsx('div', { className: 'ps-4 text-[0.625rem] text-(--ui-text-tertiary)', children: it.why }) : null,
+                  jsxs('div', {
+                    className: 'flex flex-wrap gap-1 ps-4 pt-0.5',
+                    children: [
+                      jsx(
+                        SmallButton,
+                        {
+                          primary: true,
+                          title: t('sgAskTip'),
+                          'data-sg-ask': i,
+                          onClick: () => {
+                            onAfter?.()
+                            askSuggestion(id, it.prompt)
+                          },
+                          children: [jsx(Codicon, { name: 'comment', size: '0.625rem' }, 'i'), t('sgAsk')]
+                        },
+                        'ask'
+                      ),
+                      jsx(
+                        SmallButton,
+                        { 'data-sg-use': i, onClick: () => useAsNextStep(id, it.title), children: t('sgUse') },
+                        'use'
+                      )
+                    ]
+                  })
+                ]
+              },
+              i
+            )
+          )
+        : busy === 'loading'
+          ? null
+          : jsx('div', { className: 'text-[0.625rem] text-(--ui-text-quaternary)', children: focused ? t('sgNone') : t('sgOpenToRefresh') }),
+      aiOff
+        ? jsx(Tip, {
+            label: t('sgEnableTip'),
+            children: jsx(SmallButton, {
+              'data-action': 'sg-enable',
+              onClick: () => {
+                patchSettings({ aiSuggest: 'tracked' })
+                setTimeout(() => refreshSuggestions({ force: true }), 50)
+              },
+              children: [jsx(Codicon, { name: 'sparkle', size: '0.625rem' }, 'i'), t('sgEnableAi')]
+            })
+          })
+        : null
+    ]
+  })
+}
+
+// ---- status card -------------------------------------------------------------
 
 /** The status card: all states + the note/reminder for the chosen one + actions. */
 function StatusCard({ id, onClose }) {
@@ -838,6 +1339,8 @@ function StatusCard({ id, onClose }) {
           })
         : null,
 
+      jsx(SuggestionList, { id, onAfter: onClose }),
+
       jsxs('div', {
         className: 'mt-0.5 flex items-center justify-between gap-2',
         children: [
@@ -977,7 +1480,7 @@ function StatusBar({ sessionId: id }) {
             sideOffset: cardPlacement(id).offset,
             align: 'start',
             collisionPadding: 8,
-            style: { width: 396, maxWidth: 'calc(100vw - 24px)' },
+            style: { width: 396, maxWidth: 'calc(100vw - 24px)', maxHeight: 'calc(100vh - 24px)', overflowY: 'auto' },
             ...SWALLOW,
             children: jsx(StatusCard, { id, onClose: () => setOpen(false) })
           })
@@ -990,9 +1493,10 @@ function StatusBar({ sessionId: id }) {
 
 const $bannerDismissed = atom({}) // id -> status it was dismissed at (per app run)
 
-function BannerButton({ onClick, children, primary }) {
+function BannerButton({ onClick, children, primary, ...rest }) {
   return jsx('button', {
     type: 'button',
+    ...rest,
     onClick,
     className:
       'shrink-0 rounded px-1.5 py-0.5 text-[0.6875rem] transition-colors hover:bg-(--chrome-action-hover)' +
@@ -1007,9 +1511,12 @@ function ResumeBanner() {
   const snap = useValue($snap)
   const now = useValue($now)
   const dismissed = useValue($bannerDismissed)
+  const busy = useValue($sgBusy)[id || '']
   if (!id || !snap.settings.banner) return null
-  const s = snap.statuses[id]
-  if (!s || dismissed[id] === s) return null
+  const s = snap.statuses[id] || 'none'
+  const entry = snap.suggest[id]
+  const showSuggest = !!entry && (s !== 'none' || snap.settings.aiSuggest === 'all')
+  if ((s === 'none' && !showSuggest) || dismissed[id] === s) return null
   const m = snap.meta[id] || {}
   const w = snap.waits[id]
 
@@ -1032,22 +1539,78 @@ function ResumeBanner() {
   actions.push(
     jsx(
       BannerButton,
-      { onClick: () => $bannerDismissed.set({ ...$bannerDismissed.get(), [id]: s }), children: jsx(Codicon, { name: 'close', size: '0.7rem' }) },
+      { 'data-banner-close': '',
+                  onClick: () => $bannerDismissed.set({ ...$bannerDismissed.get(), [id]: s }), children: jsx(Codicon, { name: 'close', size: '0.7rem' }) },
       'x'
     )
   )
 
+  const suggestRow = showSuggest
+    ? jsxs('div', {
+        'data-waypoint-banner-suggest': entry.source,
+        className: 'flex min-w-0 items-center gap-1.5 overflow-hidden',
+        children: [
+          jsx(Codicon, { name: 'lightbulb', size: '0.7rem' }, 'bulb'),
+          jsx('span', { className: 'shrink-0 text-(--ui-text-tertiary)', children: t('sgBanner') }, 'lbl'),
+          ...entry.items.map((it, i) =>
+            jsx(
+              Tip,
+              {
+                label: it.why ? `${it.why}\n→ ${it.prompt}` : it.prompt,
+                children: jsx('button', {
+                  type: 'button',
+                  'data-banner-sg': i,
+                  onClick: () => askSuggestion(id, it.prompt),
+                  className:
+                    'min-w-0 max-w-[16rem] truncate rounded border px-1.5 py-0.5 text-[0.6875rem] text-foreground transition-colors hover:bg-(--chrome-action-hover)',
+                  style: { borderColor: 'var(--ui-stroke-secondary)' },
+                  children: it.title
+                })
+              },
+              i
+            )
+          ),
+          busy === 'loading'
+            ? jsx('span', { className: 'shrink-0 animate-pulse text-(--ui-text-quaternary)', children: '…' }, 'busy')
+            : null,
+          s === 'none'
+            ? jsx(
+                BannerButton,
+                {
+                  'data-banner-close': '',
+                  onClick: () => $bannerDismissed.set({ ...$bannerDismissed.get(), [id]: s }),
+                  children: jsx(Codicon, { name: 'close', size: '0.7rem' })
+                },
+                'x'
+              )
+            : null
+        ]
+      })
+    : null
+
   return jsxs('div', {
     'data-waypoint-banner': s,
     dir: 'auto',
-    className: 'flex min-w-0 items-center gap-2 px-1 pb-1 text-[0.6875rem] text-(--ui-text-secondary)',
+    className: 'flex min-w-0 flex-col gap-1 px-1 pb-1 text-[0.6875rem] text-(--ui-text-secondary)',
     children: [
-      jsx('span', {
-        'aria-hidden': 'true',
-        style: { width: 3, height: 14, borderRadius: 2, background: COLORS[s], flexShrink: 0 }
-      }),
-      jsx('span', { className: 'min-w-0 flex-1 truncate', title: text, children: text }),
-      ...actions
+      s !== 'none'
+        ? jsxs(
+            'div',
+            {
+              className: 'flex min-w-0 items-center gap-2',
+              children: [
+                jsx('span', {
+                  'aria-hidden': 'true',
+                  style: { width: 3, height: 14, borderRadius: 2, background: COLORS[s], flexShrink: 0 }
+                }),
+                jsx('span', { className: 'min-w-0 flex-1 truncate', title: text, children: text }),
+                ...actions
+              ]
+            },
+            'status'
+          )
+        : null,
+      suggestRow
     ]
   })
 }
@@ -1138,6 +1701,15 @@ function BoardItem({ id, t, snap, titles, now }) {
           })
         : null,
       stale ? jsx('div', { className: 'text-(--ui-text-quaternary)', children: t('stale', ago(m.setAt, now)) }) : null,
+      s === 'wip' && snap.suggest[id]?.items?.[0]
+        ? jsx('div', {
+            'data-board-idea': id,
+            dir: 'auto',
+            className: 'truncate text-(--ui-text-quaternary)',
+            title: snap.suggest[id].items.map((x, i) => `${i + 1}. ${x.title}`).join('\n'),
+            children: t('boardIdea', snap.suggest[id].items[0].title)
+          })
+        : null,
       jsxs('div', {
         className: 'mt-1 flex flex-wrap items-center gap-1',
         children: [
@@ -1479,6 +2051,19 @@ function SettingsPanel() {
         children: jsx(Switch, { checked: st.digest, onCheckedChange: v => patchSettings({ digest: !!v }) })
       }),
       jsx(Row, {
+        title: t('sSuggest'),
+        children: jsx(SegmentedControl, {
+          options: [
+            { id: 'off', label: t('sSuggestOff') },
+            { id: 'tracked', label: t('sSuggestTracked') },
+            { id: 'all', label: t('sSuggestAll') }
+          ],
+          value: st.aiSuggest,
+          onChange: v => patchSettings({ aiSuggest: v })
+        })
+      }),
+      jsx('div', { className: 'pb-1 text-[0.625rem] text-(--ui-text-quaternary)', children: t('sSuggestNote') }),
+      jsx(Row, {
         title: t('sStale'),
         children: jsx(SegmentedControl, {
           options: ['3', '7', '14', '30'].map(d => ({ id: d, label: d })),
@@ -1655,6 +2240,20 @@ export default {
     ctx.setInterval(checkReminders, CHECK_MS)
     ctx.setInterval(refreshTitles, 5 * 60 * 1000)
     ctx.addEventListener?.(window, 'focus', () => checkReminders())
+
+    // Auto suggestions: after each finished turn in the open session, and when you switch to one.
+    ctx.onEvent?.('message.complete', ev => {
+      const sid = ev?.session_id || ev?.sessionId
+      if (sid && sid === host.state.focusedSessionId?.get?.()) scheduleRefresh(2500)
+    })
+    let lastFocus = null
+    const unsub = host.state.focusedStoredSessionId?.subscribe?.(id => {
+      if (id && id !== lastFocus) {
+        lastFocus = id
+        scheduleRefresh(1500)
+      }
+    })
+    if (unsub) ctx.onDispose?.(unsub)
     ctx.onDispose?.(() => {
       ctxRef = null
     })

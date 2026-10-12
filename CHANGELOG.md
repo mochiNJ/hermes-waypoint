@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.1.0 — 2026-10-13
+- **Suggested next steps.** Every session gets 3 ideas for what to do next, shown in the status
+  card and as one-click chips above the message box ("Next: …").
+  - **Quick** ideas are instant and free: they come from offers the assistant just made
+    ("Want me to…", "I can also…") plus sensible defaults for the session's status.
+  - **AI** ideas (opt-in) are written by your auxiliary model, the same cheap model that writes
+    session titles, from the last messages of the open session. They refresh automatically after
+    a reply, at most once every 90 seconds and only after new messages.
+  - **Ask** puts the suggestion's ready-made message in the chat box (you press send);
+    **Make it my next step** saves it as the Working note.
+- Status Board shows each Working session's top idea.
+- Setting: AI suggestions Off / Tracked sessions / All sessions.
+
 ## 2.0.0 — 2026-10-12
 - Status card (right-click / Shift+click): pick any state, 1–4 keys, Enter/Esc.
 - Working → "next step" note; Done → outcome + Start fresh session + Archive.

@@ -22,6 +22,28 @@ means more thinking, so it stays at four:
 | 🟪 purple | **Waiting** | *who/what* you're waiting on, plus a follow-up reminder |
 | 🟩 green | **Done** | the outcome, and a one-click **fresh start** |
 
+## New in 2.1: suggested next steps
+
+![Suggested next steps](media/suggestions.png)
+
+Every session gets **3 ideas for what to do next**: in the status card, and as one-click chips
+above the message box (*Next: Confirm the 19 Oct ETA · Prepare the customs checklist · …*).
+
+- **Quick ideas** are instant, free and never leave your computer. They come from offers the
+  assistant just made (*"Want me to…"*, *"I can also…"*), plus sensible defaults for the
+  session's status: a follow-up draft when you're Waiting, a handoff summary when you're Done.
+- **AI ideas** (opt-in) are written by your **auxiliary model**, the same cheap model Hermes uses
+  to name your sessions, from the last messages of the open session. Each idea comes with a
+  reason and a ready-to-send message. They refresh automatically after a reply, at most once
+  every 90 seconds and only when there are new messages.
+- **Ask** puts the idea's message in the chat box, and you press send. **Make it my next step**
+  saves it as the Working note, so it shows up in the resume banner and on the board.
+
+Turn AI ideas on from the card (**Turn on AI suggestions**) or in Board → Settings
+(*Off / Tracked sessions / All sessions*).
+
+![Resume banner with suggestions](media/banner.png)
+
 ## Features
 
 - **One-click status.** Click the bar to cycle grey → yellow → purple → green.
@@ -60,13 +82,17 @@ means more thinking, so it stays at four:
 
 - Everything is stored **locally** in the desktop app's plugin storage, keyed by
   the durable session id, so statuses survive context compression.
-- **Nothing is sent to the agent or the model.** The only time session text goes
-  near the model is when *you* press **Start fresh session**. That puts a draft
-  in a new chat, and you choose whether to send it.
-- No network calls and no telemetry. The plugin uses only the official Desktop
-  plugin SDK: session-row slots, a route, sidebar nav, status bar, composer
-  banner, palette, notifications, and the `session.list` / `session.archive`
-  gateway calls.
+- **AI suggestions are off by default.** When you turn them on, Waypoint sends the
+  last ~12 messages (trimmed, up to ~7,000 characters) of the session you have open,
+  plus its title and your notes, to your Hermes **auxiliary model** through Hermes's
+  own `llm.oneshot` call. It never uses your main chat model and never talks to any
+  other service. Quick suggestions never leave your computer.
+- **Nothing is sent to the agent.** Drafts (Ask, Insert, Start fresh session) are
+  only placed in the chat box. You choose whether to send them.
+- No network calls of its own and no telemetry. The plugin uses only the official
+  Desktop plugin SDK: session-row slots, a route, sidebar nav, status bar, composer
+  banner, palette, notifications, and the `session.list`, `session.archive`,
+  `session.history` and (opt-in) `llm.oneshot` gateway calls.
 
 ## Install
 
