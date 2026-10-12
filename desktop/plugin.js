@@ -49,7 +49,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 
 export const ID = 'waypoint' // never change: storage is namespaced by it
-export const VERSION = '2.2.0'
+export const VERSION = '2.3.0'
 // Build flag: the local install turns AI suggestions on for tracked sessions; public builds
 // ship with them off until the user opts in (they send an excerpt to the auxiliary model).
 export const DEFAULT_AI = 'off'
@@ -78,6 +78,7 @@ export const DEFAULT_SETTINGS = {
   aiSuggest: DEFAULT_AI, // 'off' | 'tracked' | 'all' — automatic AI next-step suggestions
   smartModel: 'lane', // 'lane' (auxiliary.waypoint_ideas) | 'chat' (the session's own model) | 'off'
   smartName: DEFAULT_SMART_NAME,
+  autoSmart: false, // background big idea from the strong model (Power up is always on demand)
   digest: true, // one morning summary toast per day
   labels: { wip: '', waiting: '', done: '' } // custom names ('' = default)
 }
@@ -128,6 +129,11 @@ export function normalise(raw = {}) {
   settings.digest = settings.digest !== false
   if (!['off', 'tracked', 'all'].includes(settings.aiSuggest)) settings.aiSuggest = DEFAULT_AI
   if (!['lane', 'chat', 'off'].includes(settings.smartModel)) settings.smartModel = 'lane'
+  settings.autoSmart = settings.autoSmart === true
+  if (settings.smartModel === 'off') {
+    settings.autoSmart = false
+    settings.smartModel = 'lane'
+  }
   settings.smartName = typeof settings.smartName === 'string' ? settings.smartName.slice(0, 24) : DEFAULT_SMART_NAME
   const skipped = Array.isArray(raw.skipped) ? raw.skipped.filter(x => typeof x === 'string') : []
   const digestDay = typeof raw.digestDay === 'string' ? raw.digestDay : ''
@@ -135,7 +141,8 @@ export function normalise(raw = {}) {
   for (const [id, v] of Object.entries(raw.suggest || {})) {
     const items = cleanSuggestions(v && v.items)
     const smartItem = v && v.smart ? cleanSuggestions([v.smart.item])[0] : null
-    if (items.length || smartItem) {
+    const powerItems = v && v.power ? cleanSuggestions(v.power.items) : []
+    if (items.length || smartItem || powerItems.length) {
       suggest[id] = {
         items,
         source: v.source === 'ai' ? 'ai' : 'quick',
@@ -146,6 +153,13 @@ export function normalise(raw = {}) {
               item: { ...smartItem, src: 'smart' },
               at: Number.isFinite(v.smart.at) ? v.smart.at : 0,
               msgCount: Number.isFinite(v.smart.msgCount) ? v.smart.msgCount : 0
+            }
+          : null,
+        power: powerItems.length
+          ? {
+              items: powerItems.map(it => ({ ...it, src: 'power' })),
+              at: Number.isFinite(v.power.at) ? v.power.at : 0,
+              msgCount: Number.isFinite(v.power.msgCount) ? v.power.msgCount : 0
             }
           : null
       }
@@ -218,9 +232,11 @@ export function counts(snap, now = Date.now()) {
 
 // ---- next-step suggestions (pure) -------------------------------------------
 
-export const SUGGEST_INSTRUCTIONS = "You suggest what the user should do next in a work session with an AI assistant.\nRead the session title, the user's own status notes and the conversation excerpt.\nReply with ONLY a JSON array of exactly 3 objects, no markdown and no other text:\n[{\"title\": \"...\", \"why\": \"...\", \"prompt\": \"...\", \"priority\": \"high\"}]\n- title: a short imperative action, at most 8 words.\n- why: one short reason, at most 18 words.\n- prompt: the exact message the user could send to the assistant to start it, written by the user in first person, at most 40 words.\n- priority: \"high\" = matters most right now, \"medium\" = useful but can wait, \"low\" = optional. Use each level honestly; at most one \"high\".\nMake the three different: (1) the most natural next step, (2) a check, test or loose end, (3) one bigger move forward.\nPrefer things the assistant offered to do, questions it asked, or decisions still open. Never suggest something already done.\nWrite in the language the user writes in."
+export const SUGGEST_INSTRUCTIONS = "You suggest what the user should do next in a work session with an AI assistant.\nRead the session title, the user's own status notes and the conversation excerpt.\nReply with ONLY a JSON array of exactly 3 objects, no markdown and no other text:\n[{\"title\": \"...\", \"why\": \"...\", \"prompt\": \"...\", \"priority\": \"high\"}]\n- title: a short imperative action, at most 8 words.\n- why: one short reason, at most 18 words.\n- prompt: the exact message the user could send to the assistant to start it, written by the user in first person, at most 40 words.\n- priority: \"high\" = matters most right now, \"medium\" = useful but can wait, \"low\" = optional. Use each level honestly; at most one \"high\".\nMake the three different: (1) the most natural next step, (2) a check, test or loose end, (3) one bigger move forward.\nPrefer things the assistant offered to do, questions it asked, or decisions still open. Never suggest something already done.\nKeep the JSON keys exactly as shown in English; write only the values in the language the user writes in."
 
-export const SMART_INSTRUCTIONS = "You are a sharp senior advisor. Read the session title, the user's status notes and the conversation excerpt, then propose the single most valuable NEXT MOVE: a big, smart step that moves the work forward the most (not a tiny chore, not something already done).\nReply with ONLY a JSON array with exactly 1 object, no markdown:\n[{\"title\": \"...\", \"why\": \"...\", \"prompt\": \"...\", \"priority\": \"high\"}]\n- title: imperative, at most 8 words.\n- why: one concrete reason tied to this conversation, at most 20 words.\n- prompt: the exact message the user would send to the assistant to start it, first person, at most 45 words.\n- priority: \"high\" if it clearly matters most right now, otherwise \"medium\".\nWrite in the language the user writes in."
+export const POWER_INSTRUCTIONS = "The user feels stuck on this work session with an AI assistant and pressed \"Power up\". Think carefully like a sharp senior advisor.\nRead the session title, the user's status notes and the conversation excerpt, then give the 3 best ways to continue: specific, ambitious where it matters, grounded in this conversation, never something already done.\nReply with ONLY a JSON array of exactly 3 objects, no markdown:\n[{\"title\": \"...\", \"why\": \"...\", \"prompt\": \"...\", \"priority\": \"high\"}]\n- title: imperative, at most 8 words.\n- why: one concrete reason tied to this conversation, at most 20 words.\n- prompt: the exact message the user would send to the assistant to start it, first person, at most 50 words.\n- priority: \"high\" = matters most now (exactly one), \"medium\" = valuable next, \"low\" = optional or later.\nCover different angles: the single best next move, an unblocker or risk check, and a bigger idea that could pay off.\nKeep the JSON keys exactly as shown in English; write only the values in the language the user writes in."
+
+export const SMART_INSTRUCTIONS = "You are a sharp senior advisor. Read the session title, the user's status notes and the conversation excerpt, then propose the single most valuable NEXT MOVE: a big, smart step that moves the work forward the most (not a tiny chore, not something already done).\nReply with ONLY a JSON array with exactly 1 object, no markdown:\n[{\"title\": \"...\", \"why\": \"...\", \"prompt\": \"...\", \"priority\": \"high\"}]\n- title: imperative, at most 8 words.\n- why: one concrete reason tied to this conversation, at most 20 words.\n- prompt: the exact message the user would send to the assistant to start it, first person, at most 45 words.\n- priority: \"high\" if it clearly matters most right now, otherwise \"medium\".\nKeep the JSON keys exactly as shown in English; write only the values in the language the user writes in."
 
 const clip = (v, n) => {
   const t = String(v ?? '').replace(/\s+/g, ' ').trim()
@@ -347,8 +363,8 @@ export function aiDue({ mode, status, cached, msgCount, now = Date.now(), force 
 }
 
 /** Should the strong model write a fresh big idea now? Rarer than the cheap lane. */
-export function smartDue({ mode, smartModel, status, cached, msgCount, now = Date.now(), force = false }) {
-  if (mode === 'off' || smartModel === 'off' || status === 'done') return false
+export function smartDue({ mode, smartModel, autoSmart = true, status, cached, msgCount, now = Date.now(), force = false }) {
+  if (mode === 'off' || smartModel === 'off' || !autoSmart || status === 'done') return false
   if (mode === 'tracked' && (!status || status === 'none')) return false
   const sm = cached && cached.smart
   if (force || !sm) return true
@@ -359,10 +375,17 @@ const RANK = { high: 0, medium: 1, low: 2 }
 
 /** What to show: the strong model's idea is always included (when there is one), the rest
  *  topped up from the cheap/quick lane, then ordered by priority (smart first on ties). */
+/** Power-up ideas stay on screen until the chat moves on by 2+ messages. */
+export function powerFresh(entry) {
+  const pw = entry && entry.power
+  return !!(pw && pw.items && pw.items.length && (entry.msgCount || 0) - (pw.msgCount || 0) < 2)
+}
+
 export function mergeSuggestions(entry) {
   if (!entry) return []
   const rank = it => RANK[it.priority] ?? 1
   const byPriority = list => list.map((it, i) => ({ it, i })).sort((a, b) => rank(a.it) - rank(b.it) || a.i - b.i).map(x => x.it)
+  if (powerFresh(entry)) return byPriority(entry.power.items.map(it => ({ ...it, src: 'power' }))).slice(0, 3)
   const out = []
   const seen = new Set()
   const push = it => {
@@ -572,12 +595,18 @@ const EN = {
   markComplete: 'Mark complete',
   markCompleteTip: 'Turns the bar green and stops suggestions for this session.',
   completed: 'Completed',
-  sSmart: 'Big-idea model',
+  powerUp: 'Power up',
+  powerTip: name => `Stuck or out of ideas? Ask ${name} for 3 sharper ways to continue.`,
+  powerThinking: name => `${name} is thinking…`,
+  powerActive: name => `Powered up by ${name}`,
+  powerError: 'Power up failed — the strong model did not answer. Try again.',
+  sAutoSmart: 'Also add a big idea automatically (background)',
+  sSmart: 'Power-up model',
   sSmartLane: 'Strong model',
   sSmartChat: 'My chat model',
   sSmartOff: 'Off',
   sSmartName: 'Name shown on the big idea',
-  sSmartNote: 'One suggestion always comes from a strong model, refreshed at most every 10 minutes. “Strong model” uses Hermes auxiliary task “waypoint_ideas” — pick its model in Hermes (e.g. Claude Sonnet 5.5); unset, it falls back to the cheap model. “My chat model” uses the open session’s own model.'
+  sSmartNote: 'Power up asks a strong model for 3 sharper ideas, only when you press it. “Strong model” uses Hermes auxiliary task “waypoint_ideas” — pick its model in Hermes (e.g. Claude Sonnet 5.5); unset, it falls back to the cheap model. “My chat model” uses the open session’s own model (e.g. Opus). The automatic big idea refreshes at most every 10 minutes.'
 }
 
 const AR = {
@@ -721,7 +750,13 @@ const AR = {
   markComplete: 'خلصت',
   markCompleteTip: 'بيخلّي الشريط أخضر وبيوقّف الاقتراحات لهالجلسة.',
   completed: 'خالصة',
-  sSmart: 'موديل الفكرة الكبيرة',
+  powerUp: 'قوّي الأفكار',
+  powerTip: name => `علقان أو خلصوا الأفكار؟ اسأل ${name} عن ٣ طرق أذكى لتكمّل.`,
+  powerThinking: name => `${name} عم يفكّر…`,
+  powerActive: name => `أفكار من ${name}`,
+  powerError: 'تقوية الأفكار ما زبطت — الموديل القوي ما ردّ. جرّب كمان مرة.',
+  sAutoSmart: 'زيد فكرة كبيرة أوتوماتيك (بالخلفية)',
+  sSmart: 'موديل تقوية الأفكار',
   sSmartLane: 'موديل قوي',
   sSmartChat: 'موديل المحادثة',
   sSmartOff: 'مطفي',
@@ -958,20 +993,21 @@ function setBusy(id, v) {
 
 async function oneshot(kind, input) {
   const st = $snap.get().settings
+  const strong = kind !== 'quick'
   const params = {
-    instructions: kind === 'smart' ? SMART_INSTRUCTIONS : SUGGEST_INSTRUCTIONS,
+    instructions: kind === 'power' ? POWER_INSTRUCTIONS : kind === 'smart' ? SMART_INSTRUCTIONS : SUGGEST_INSTRUCTIONS,
     input,
-    max_tokens: kind === 'smart' ? 600 : 700,
-    temperature: kind === 'smart' ? 0.5 : 0.4
+    max_tokens: kind === 'power' ? 900 : kind === 'smart' ? 600 : 700,
+    temperature: kind === 'quick' ? 0.4 : 0.5
   }
-  if (kind === 'smart' && st.smartModel === 'chat') {
+  if (strong && st.smartModel === 'chat') {
     // Borrow the open session's own (strong) model — the user chose this in settings.
     params.session_id = host.state.focusedSessionId?.get?.()
     params.task = SMART_TASK
   } else {
     // Cheap lane: the title model. Strong lane: its own auxiliary task the user can point at
     // any model (auxiliary.waypoint_ideas). Never pass session_id here.
-    params.task = kind === 'smart' ? SMART_TASK : 'title_generation'
+    params.task = strong ? SMART_TASK : 'title_generation'
     const profile = host.state.focusedSessionProfile?.get?.()
     if (profile) params.profile = profile
   }
@@ -1013,7 +1049,7 @@ async function refreshSuggestions({ force = false, allowAi = true } = {}) {
   const st = snap.settings
   const wantAi = allowAi && aiDue({ mode: st.aiSuggest, status, cached, msgCount, now, force })
   const wantSmart =
-    allowAi && smartDue({ mode: st.aiSuggest, smartModel: st.smartModel, status, cached, msgCount, now, force })
+    allowAi && smartDue({ mode: st.aiSuggest, smartModel: st.smartModel, autoSmart: st.autoSmart, status, cached, msgCount, now, force })
   const replaceQuick =
     !cached ||
     !cached.items?.length ||
@@ -1075,11 +1111,57 @@ function setSmartBusy(id, v) {
   $smartBusy.set(b)
 }
 
+const $powerBusy = atom({})
+function setPowerBusy(id, v) {
+  const b = { ...$powerBusy.get() }
+  if (v) b[id] = v
+  else delete b[id]
+  $powerBusy.set(b)
+}
+
+/** "Power up": the user asks the strong model for 3 sharper ideas, on demand. */
+async function powerUp(id) {
+  if ($snap.get().statuses[id] === 'done' || $powerBusy.get()[id] === 'loading') return
+  if (host.state.focusedStoredSessionId?.get?.() !== id) {
+    openSession(id)
+    for (let i = 0; i < 25; i++) {
+      await new Promise(r => setTimeout(r, 200))
+      if (host.state.focusedStoredSessionId?.get?.() === id && host.state.focusedSessionId?.get?.()) break
+    }
+  }
+  const runtime = host.state.focusedSessionId?.get?.()
+  if (!runtime) return
+  setPowerBusy(id, 'loading')
+  try {
+    const res = await host.request('session.history', { session_id: runtime })
+    const messages = res?.messages || []
+    const snap = $snap.get()
+    const meta = snap.meta[id] || {}
+    const input = suggestInput({
+      title: $titles.get()[id] || '',
+      status: snap.statuses[id] || 'none',
+      next: meta.next,
+      who: snap.waits[id]?.who || '',
+      outcome: meta.outcome,
+      transcript: transcriptOf(messages, { maxMessages: 20, perMessage: 900, maxChars: 12000 })
+    })
+    const items = parseSuggestions(await oneshot('power', input))
+    if (!items.length) throw new Error('empty')
+    if ($snap.get().statuses[id] === 'done') return setPowerBusy(id, null)
+    const msgCount = messages.length
+    patchSuggest(id, { msgCount, power: { items: items.map(it => ({ ...it, src: 'power' })), at: Date.now(), msgCount } })
+    setPowerBusy(id, null)
+  } catch {
+    setPowerBusy(id, 'error')
+  }
+}
+
 /** "Mark complete": green bar, suggestions stop for this session. */
 function completeSession(id) {
   commit(applyStatus($snap.get(), id, 'done'))
   setBusy(id, null)
   setSmartBusy(id, null)
+  setPowerBusy(id, null)
 }
 
 let sgTimer = null
@@ -1250,6 +1332,32 @@ function SmartBadge({ name, t }) {
   })
 }
 
+function PowerButton({ id, compact, t }) {
+  const snap = useValue($snap)
+  const busy = useValue($powerBusy)[id]
+  const name = snap.settings.smartName || t('sgSmart')
+  return jsx(Tip, {
+    label: t('powerTip', name),
+    children: jsxs('button', {
+      type: 'button',
+      'data-action': 'power-up',
+      disabled: busy === 'loading',
+      onClick: e => {
+        e.stopPropagation()
+        powerUp(id)
+      },
+      className:
+        'inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[0.625rem] font-medium transition-colors hover:bg-(--chrome-action-hover) disabled:opacity-60' +
+        (busy === 'loading' ? ' animate-pulse' : ''),
+      style: { borderColor: 'var(--ui-accent, var(--ui-stroke-secondary))', color: 'var(--ui-accent, var(--foreground))' },
+      children: [
+        jsx(Codicon, { name: 'zap', size: '0.65rem' }, 'i'),
+        compact ? null : busy === 'loading' ? t('powerThinking', name) : t('powerUp')
+      ]
+    })
+  })
+}
+
 function SuggestionList({ id, onAfter }) {
   const t = usePluginI18n(ID)
   const snap = useValue($snap)
@@ -1259,6 +1367,7 @@ function SuggestionList({ id, onAfter }) {
   const entry = snap.suggest[id]
   const aiOff = snap.settings.aiSuggest === 'off'
   const items = mergeSuggestions(entry)
+  const powerBusy = useValue($powerBusy)[id]
   const loading = busy === 'loading' || smartBusy === 'loading'
 
   useEffect(() => {
@@ -1270,7 +1379,7 @@ function SuggestionList({ id, onAfter }) {
     children: [
       jsx(Codicon, { name: 'lightbulb', size: '0.75rem' }),
       jsx('span', { className: 'font-medium text-foreground', children: t('sgHeader') }),
-      entry
+      entry && !powerFresh(entry)
         ? jsx(Tip, {
             label: entry.source === 'ai' ? t('sgAiTip') : t('sgQuickTip'),
             children: jsx('span', {
@@ -1288,6 +1397,7 @@ function SuggestionList({ id, onAfter }) {
             children: smartBusy === 'loading' ? t('sgThinkingSmart', snap.settings.smartName || t('sgSmart')) : t('sgThinking')
           })
         : null,
+      jsx(PowerButton, { id, t }),
       jsx(Tip, {
         label: focused ? t('sgRefresh') : t('sgOpenToRefresh'),
         children: jsx('button', {
@@ -1311,11 +1421,22 @@ function SuggestionList({ id, onAfter }) {
     style: { border: '1px solid var(--ui-stroke-secondary)' },
     children: [
       header,
-      busy === 'error' && !items.some(x => x.src === 'smart')
+      busy === 'error' && !items.some(x => x.src === 'smart' || x.src === 'power')
         ? jsx('div', { className: 'text-[0.625rem] text-(--ui-text-quaternary)', children: t('sgError') })
         : null,
       smartBusy === 'error'
         ? jsx('div', { 'data-sg-smart-error': '', className: 'text-[0.625rem] text-(--ui-text-quaternary)', children: t('sgSmartError') })
+        : null,
+      powerBusy === 'error'
+        ? jsx('div', { 'data-power-error': '', className: 'text-[0.625rem] text-(--ui-text-quaternary)', children: t('powerError') })
+        : null,
+      powerFresh(entry)
+        ? jsxs('div', {
+            'data-power-active': '',
+            className: 'flex items-center gap-1 text-[0.625rem]',
+            style: { color: 'var(--ui-accent, var(--foreground))' },
+            children: [jsx(Codicon, { name: 'zap', size: '0.6rem' }, 'i'), t('powerActive', snap.settings.smartName || t('sgSmart'))]
+          })
         : null,
       items.length
         ? items.map((it, i) =>
@@ -1807,7 +1928,7 @@ function ResumeBanner() {
                     borderInlineStart: `3px solid ${PRIORITY_COLOR[it.priority] || PRIORITY_COLOR.medium}`
                   },
                   children: [
-                    it.src === 'smart' ? jsx(Codicon, { name: 'sparkle', size: '0.6rem' }, 's') : null,
+                    it.src === 'smart' || it.src === 'power' ? jsx(Codicon, { name: it.src === 'power' ? 'zap' : 'sparkle', size: '0.6rem' }, 's') : null,
                     jsx('span', { className: 'truncate', children: it.title }, 't')
                   ]
                 })
@@ -1818,6 +1939,7 @@ function ResumeBanner() {
           busy === 'loading'
             ? jsx('span', { className: 'shrink-0 animate-pulse text-(--ui-text-quaternary)', children: '…' }, 'busy')
             : null,
+          jsx(PowerButton, { id, t }, 'power'),
           s === 'none'
             ? jsx(
                 BannerButton,
@@ -2313,12 +2435,15 @@ function SettingsPanel() {
         children: jsx(SegmentedControl, {
           options: [
             { id: 'lane', label: t('sSmartLane') },
-            { id: 'chat', label: t('sSmartChat') },
-            { id: 'off', label: t('sSmartOff') }
+            { id: 'chat', label: t('sSmartChat') }
           ],
           value: st.smartModel,
           onChange: v => patchSettings({ smartModel: v })
         })
+      }),
+      jsx(Row, {
+        title: t('sAutoSmart'),
+        children: jsx(Switch, { checked: st.autoSmart, onCheckedChange: v => patchSettings({ autoSmart: !!v }) })
       }),
       jsx(Row, {
         title: t('sSmartName'),

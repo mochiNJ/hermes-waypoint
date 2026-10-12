@@ -42,14 +42,16 @@ above the message box (*Next: Confirm the 19 Oct ETA · Prepare the customs chec
 Turn AI ideas on from the card (**Turn on AI suggestions**) or in Board → Settings
 (*Off / Tracked sessions / All sessions*).
 
-### Big idea from a strong model (2.2)
+### ⚡ Power up: strong-model ideas on demand
 
-One of the three ideas always comes from a **strong model** and is marked with its name
-(e.g. ✦ Sonnet 5.5). It aims at the most valuable next move, not a chore. To keep usage low it
-refreshes at most every 10 minutes, and only after 4+ new messages (or when you press refresh).
+Feeling stuck? Press **⚡ Power up** in the status card or on the *Next:* row. Waypoint sends a
+longer slice of the chat to your **strong model** and gets back **3 sharper ways to continue**,
+each with a reason, a priority and a ready-to-send message. It runs **only when you press it**,
+so your strong-model usage stays under your control. The ideas stay on screen until the chat
+moves on.
 
-Pick its model like any other Hermes auxiliary model. With the Python half enabled it appears as
-**Waypoint big ideas**, or set it directly:
+Pick the power-up model like any other Hermes auxiliary model. With the Python half enabled it
+appears as **Waypoint big ideas**, or set it directly:
 
 ```bash
 hermes config set auxiliary.waypoint_ideas.provider anthropic
@@ -57,7 +59,9 @@ hermes config set auxiliary.waypoint_ideas.model claude-sonnet-5-5
 ```
 
 If you leave it unset, it falls back to your cheap auxiliary model. In Board → Settings →
-*Big-idea model* you can also use **My chat model** (the open session's own model) or turn it **Off**.
+*Power-up model* you can instead pick **My chat model**, the open session's own model (e.g. Opus).
+There is also an optional switch that adds one strong-model "big idea" automatically in the
+background, refreshed at most every 10 minutes; it is off by default.
 
 **Priority colours:** 🟢 important · 🟡 less important · 🔴 optional. Ideas are sorted by priority.
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.0 — 2026-10-13
+- **⚡ Power up** button (in the status card and on the "Next:" row): when you feel stuck, it asks
+  your strong model for **3 sharper ways to continue**, using a longer slice of the chat. It runs
+  only when you press it. The ideas replace the list until the chat moves on.
+- The automatic background "big idea" is now **off by default**. Turn it on in Settings if you want it.
+- Power-up model: the `waypoint_ideas` auxiliary model (e.g. Claude Sonnet 5.5) or **My chat
+  model** (the open session's own model, e.g. Opus).
+- Prompts keep JSON keys in English so Arabic replies always parse.
+
 ## 2.2.0 — 2026-10-13
 - **Mark complete** button in the status card: turns the bar green and **stops suggestions** for
   that session (cached ideas are cleared, no more model calls). Choose Working to bring them back.
