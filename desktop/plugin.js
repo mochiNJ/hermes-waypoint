@@ -29,6 +29,10 @@ import {
   COMPOSER_AREAS,
   Codicon,
   ConfirmDialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   host,
   Input,
   PALETTE_AREA,
@@ -49,14 +53,17 @@ import { useEffect, useMemo, useState } from 'react'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 
 export const ID = 'waypoint' // never change: storage is namespaced by it
-export const VERSION = '2.3.0'
+export const VERSION = '2.4.0'
 // Build flag: the local install turns AI suggestions on for tracked sessions; public builds
 // ship with them off until the user opts in (they send an excerpt to the auxiliary model).
 export const DEFAULT_AI = 'off'
 // Label shown on the strong model's suggestion ('' = generic "Smart"). Local build names the
 // model configured for auxiliary.waypoint_ideas on this PC.
 export const DEFAULT_SMART_NAME = ''
+export const DEFAULT_SMART_NAME_2 = ''
 export const SMART_TASK = 'waypoint_ideas'
+export const SMART_TASK_2 = 'waypoint_ideas_2'
+export const POWER_CHOICES = ['lane', 'lane2', 'chat']
 const SMART_EVERY_MS = 10 * 60 * 1000
 const SMART_MIN_NEW = 4
 const ROUTE = '/session-status'
@@ -78,6 +85,7 @@ export const DEFAULT_SETTINGS = {
   aiSuggest: DEFAULT_AI, // 'off' | 'tracked' | 'all' — automatic AI next-step suggestions
   smartModel: 'lane', // 'lane' (auxiliary.waypoint_ideas) | 'chat' (the session's own model) | 'off'
   smartName: DEFAULT_SMART_NAME,
+  smartName2: DEFAULT_SMART_NAME_2,
   autoSmart: false, // background big idea from the strong model (Power up is always on demand)
   digest: true, // one morning summary toast per day
   labels: { wip: '', waiting: '', done: '' } // custom names ('' = default)
@@ -128,13 +136,14 @@ export function normalise(raw = {}) {
   settings.banner = settings.banner !== false
   settings.digest = settings.digest !== false
   if (!['off', 'tracked', 'all'].includes(settings.aiSuggest)) settings.aiSuggest = DEFAULT_AI
-  if (!['lane', 'chat', 'off'].includes(settings.smartModel)) settings.smartModel = 'lane'
+  if (!['lane', 'lane2', 'chat', 'off'].includes(settings.smartModel)) settings.smartModel = 'lane'
   settings.autoSmart = settings.autoSmart === true
   if (settings.smartModel === 'off') {
     settings.autoSmart = false
     settings.smartModel = 'lane'
   }
   settings.smartName = typeof settings.smartName === 'string' ? settings.smartName.slice(0, 24) : DEFAULT_SMART_NAME
+  settings.smartName2 = typeof settings.smartName2 === 'string' ? settings.smartName2.slice(0, 24) : DEFAULT_SMART_NAME_2
   const skipped = Array.isArray(raw.skipped) ? raw.skipped.filter(x => typeof x === 'string') : []
   const digestDay = typeof raw.digestDay === 'string' ? raw.digestDay : ''
   const suggest = {}
@@ -158,6 +167,7 @@ export function normalise(raw = {}) {
         power: powerItems.length
           ? {
               items: powerItems.map(it => ({ ...it, src: 'power' })),
+              by: typeof v.power.by === 'string' ? v.power.by.slice(0, 40) : '',
               at: Number.isFinite(v.power.at) ? v.power.at : 0,
               msgCount: Number.isFinite(v.power.msgCount) ? v.power.msgCount : 0
             }
@@ -375,6 +385,14 @@ const RANK = { high: 0, medium: 1, low: 2 }
 
 /** What to show: the strong model's idea is always included (when there is one), the rest
  *  topped up from the cheap/quick lane, then ordered by priority (smart first on ties). */
+/** Display name of a power-up model choice. */
+export function powerName(settings, choice, t = k => k) {
+  const c = choice || settings.smartModel
+  if (c === 'chat') return t('pwChat')
+  if (c === 'lane2') return settings.smartName2 || t('pwSlot2')
+  return settings.smartName || t('pwSlot1')
+}
+
 /** Power-up ideas stay on screen until the chat moves on by 2+ messages. */
 export function powerFresh(entry) {
   const pw = entry && entry.power
@@ -596,6 +614,11 @@ const EN = {
   markCompleteTip: 'Turns the bar green and stops suggestions for this session.',
   completed: 'Completed',
   powerUp: 'Power up',
+  powerUpWith: name => `Power up · ${name}`,
+  pwPick: 'Power up with…',
+  pwChat: 'My chat model',
+  pwSlot1: 'Strong model 1',
+  pwSlot2: 'Strong model 2',
   powerTip: name => `Stuck or out of ideas? Ask ${name} for 3 sharper ways to continue.`,
   powerThinking: name => `${name} is thinking…`,
   powerActive: name => `Powered up by ${name}`,
@@ -605,8 +628,8 @@ const EN = {
   sSmartLane: 'Strong model',
   sSmartChat: 'My chat model',
   sSmartOff: 'Off',
-  sSmartName: 'Name shown on the big idea',
-  sSmartNote: 'Power up asks a strong model for 3 sharper ideas, only when you press it. “Strong model” uses Hermes auxiliary task “waypoint_ideas” — pick its model in Hermes (e.g. Claude Sonnet 5.5); unset, it falls back to the cheap model. “My chat model” uses the open session’s own model (e.g. Opus). The automatic big idea refreshes at most every 10 minutes.'
+  sSmartName: 'Names of strong models 1 and 2',
+  sSmartNote: 'Power up asks a strong model for 3 sharper ideas, only when you press it; pick the model from the arrow next to the button. Strong model 1 and 2 are the Hermes auxiliary tasks “waypoint_ideas” and “waypoint_ideas_2” — choose their models in Hermes (e.g. Claude Opus 5.5 and Sonnet 5.5); unset, they fall back to the cheap model. “My chat model” uses the open session’s own model. The automatic big idea refreshes at most every 10 minutes.'
 }
 
 const AR = {
@@ -751,6 +774,11 @@ const AR = {
   markCompleteTip: 'بيخلّي الشريط أخضر وبيوقّف الاقتراحات لهالجلسة.',
   completed: 'خالصة',
   powerUp: 'قوّي الأفكار',
+  powerUpWith: name => `قوّي الأفكار · ${name}`,
+  pwPick: 'قوّي الأفكار بـ…',
+  pwChat: 'موديل المحادثة',
+  pwSlot1: 'موديل قوي ١',
+  pwSlot2: 'موديل قوي ٢',
   powerTip: name => `علقان أو خلصوا الأفكار؟ اسأل ${name} عن ٣ طرق أذكى لتكمّل.`,
   powerThinking: name => `${name} عم يفكّر…`,
   powerActive: name => `أفكار من ${name}`,
@@ -760,7 +788,7 @@ const AR = {
   sSmartLane: 'موديل قوي',
   sSmartChat: 'موديل المحادثة',
   sSmartOff: 'مطفي',
-  sSmartName: 'الاسم الظاهر عالفكرة الكبيرة',
+  sSmartName: 'أسماء الموديلين القويين ١ و٢',
   sSmartNote: 'اقتراح واحد دايماً من موديل قوي، بيتجدد كحد أقصى كل ١٠ دقايق. «موديل قوي» بيستعمل مهمة Hermes «waypoint_ideas» — اختار موديلها بـ Hermes (مثلاً Claude Sonnet 5.5). «موديل المحادثة» بيستعمل موديل الجلسة نفسها.'
 }
 
@@ -991,23 +1019,25 @@ function setBusy(id, v) {
   $sgBusy.set(b)
 }
 
-async function oneshot(kind, input) {
+async function oneshot(kind, input, choiceOverride) {
   const st = $snap.get().settings
   const strong = kind !== 'quick'
   const params = {
     instructions: kind === 'power' ? POWER_INSTRUCTIONS : kind === 'smart' ? SMART_INSTRUCTIONS : SUGGEST_INSTRUCTIONS,
     input,
-    max_tokens: kind === 'power' ? 900 : kind === 'smart' ? 600 : 700,
+    // Strong models may think before answering (reasoning budgets count here): leave room.
+    max_tokens: kind === 'power' ? 4000 : kind === 'smart' ? 2000 : 700,
     temperature: kind === 'quick' ? 0.4 : 0.5
   }
-  if (strong && st.smartModel === 'chat') {
+  const choice = choiceOverride || st.smartModel
+  if (strong && choice === 'chat') {
     // Borrow the open session's own (strong) model — the user chose this in settings.
     params.session_id = host.state.focusedSessionId?.get?.()
     params.task = SMART_TASK
   } else {
     // Cheap lane: the title model. Strong lane: its own auxiliary task the user can point at
     // any model (auxiliary.waypoint_ideas). Never pass session_id here.
-    params.task = strong ? SMART_TASK : 'title_generation'
+    params.task = !strong ? 'title_generation' : choice === 'lane2' ? SMART_TASK_2 : SMART_TASK
     const profile = host.state.focusedSessionProfile?.get?.()
     if (profile) params.profile = profile
   }
@@ -1112,6 +1142,7 @@ function setSmartBusy(id, v) {
 }
 
 const $powerBusy = atom({})
+const $powerWho = atom({}) // id -> model name currently thinking
 function setPowerBusy(id, v) {
   const b = { ...$powerBusy.get() }
   if (v) b[id] = v
@@ -1120,8 +1151,13 @@ function setPowerBusy(id, v) {
 }
 
 /** "Power up": the user asks the strong model for 3 sharper ideas, on demand. */
-async function powerUp(id) {
+async function powerUp(id, choice) {
   if ($snap.get().statuses[id] === 'done' || $powerBusy.get()[id] === 'loading') return
+  if (choice && POWER_CHOICES.includes(choice) && choice !== $snap.get().settings.smartModel) patchSettings({ smartModel: choice })
+  const useChoice = choice || $snap.get().settings.smartModel
+  const byName = powerName($snap.get().settings, useChoice === 'off' ? 'lane' : useChoice, T())
+  setPowerBusy(id, 'loading')
+  $powerWho.set({ ...$powerWho.get(), [id]: byName })
   if (host.state.focusedStoredSessionId?.get?.() !== id) {
     openSession(id)
     for (let i = 0; i < 25; i++) {
@@ -1130,8 +1166,7 @@ async function powerUp(id) {
     }
   }
   const runtime = host.state.focusedSessionId?.get?.()
-  if (!runtime) return
-  setPowerBusy(id, 'loading')
+  if (!runtime) return setPowerBusy(id, null)
   try {
     const res = await host.request('session.history', { session_id: runtime })
     const messages = res?.messages || []
@@ -1145,11 +1180,11 @@ async function powerUp(id) {
       outcome: meta.outcome,
       transcript: transcriptOf(messages, { maxMessages: 20, perMessage: 900, maxChars: 12000 })
     })
-    const items = parseSuggestions(await oneshot('power', input))
+    const items = parseSuggestions(await oneshot('power', input, useChoice === 'off' ? 'lane' : useChoice))
     if (!items.length) throw new Error('empty')
     if ($snap.get().statuses[id] === 'done') return setPowerBusy(id, null)
     const msgCount = messages.length
-    patchSuggest(id, { msgCount, power: { items: items.map(it => ({ ...it, src: 'power' })), at: Date.now(), msgCount } })
+    patchSuggest(id, { msgCount, power: { items: items.map(it => ({ ...it, src: 'power' })), by: byName, at: Date.now(), msgCount } })
     setPowerBusy(id, null)
   } catch {
     setPowerBusy(id, 'error')
@@ -1332,29 +1367,90 @@ function SmartBadge({ name, t }) {
   })
 }
 
-function PowerButton({ id, compact, t }) {
+function PowerButton({ id, t }) {
   const snap = useValue($snap)
   const busy = useValue($powerBusy)[id]
-  const name = snap.settings.smartName || t('sgSmart')
-  return jsx(Tip, {
-    label: t('powerTip', name),
-    children: jsxs('button', {
-      type: 'button',
-      'data-action': 'power-up',
-      disabled: busy === 'loading',
-      onClick: e => {
-        e.stopPropagation()
-        powerUp(id)
-      },
-      className:
-        'inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[0.625rem] font-medium transition-colors hover:bg-(--chrome-action-hover) disabled:opacity-60' +
-        (busy === 'loading' ? ' animate-pulse' : ''),
-      style: { borderColor: 'var(--ui-accent, var(--ui-stroke-secondary))', color: 'var(--ui-accent, var(--foreground))' },
-      children: [
-        jsx(Codicon, { name: 'zap', size: '0.65rem' }, 'i'),
-        compact ? null : busy === 'loading' ? t('powerThinking', name) : t('powerUp')
-      ]
-    })
+  const who = useValue($powerWho)[id]
+  const st = snap.settings
+  const current = st.smartModel === 'off' ? 'lane' : st.smartModel
+  const name = powerName(st, current, t)
+  const loading = busy === 'loading'
+  const accent = { borderColor: 'var(--ui-accent, var(--ui-stroke-secondary))', color: 'var(--ui-accent, var(--foreground))' }
+  return jsxs('span', {
+    'data-power-group': '',
+    className: 'inline-flex shrink-0 items-stretch',
+    onClick: stop,
+    onPointerDown: stop,
+    onMouseDown: stop,
+    children: [
+      jsx(
+        Tip,
+        {
+          label: t('powerTip', name),
+          children: jsxs('button', {
+            type: 'button',
+            'data-action': 'power-up',
+            disabled: loading,
+            onClick: e => {
+              e.stopPropagation()
+              powerUp(id)
+            },
+            className:
+              'inline-flex items-center gap-1 rounded-s border px-1.5 py-0.5 text-[0.625rem] font-medium transition-colors hover:bg-(--chrome-action-hover) disabled:opacity-60' +
+              (loading ? ' animate-pulse' : ''),
+            style: accent,
+            children: [
+              jsx(Codicon, { name: 'zap', size: '0.65rem' }, 'i'),
+              loading ? t('powerThinking', who || name) : t('powerUpWith', name)
+            ]
+          })
+        },
+        'btn'
+      ),
+      jsxs(
+        DropdownMenu,
+        {
+          children: [
+            jsx(DropdownMenuTrigger, {
+              asChild: true,
+              children: jsx('button', {
+                type: 'button',
+                'data-action': 'power-menu',
+                'aria-label': t('pwPick'),
+                disabled: loading,
+                className:
+                  'inline-flex items-center rounded-e border border-s-0 px-1 text-[0.625rem] transition-colors hover:bg-(--chrome-action-hover) disabled:opacity-60',
+                style: accent,
+                children: jsx(Codicon, { name: 'chevron-down', size: '0.6rem' })
+              })
+            }),
+            jsxs(DropdownMenuContent, {
+              align: 'end',
+              'data-power-menu': '',
+              ...SWALLOW,
+              children: [
+                jsx('div', { className: 'px-2 py-1 text-[0.625rem] text-(--ui-text-tertiary)', children: t('pwPick') }, 'h'),
+                ...POWER_CHOICES.map(c =>
+                  jsxs(
+                    DropdownMenuItem,
+                    {
+                      'data-power-choice': c,
+                      onSelect: () => powerUp(id, c),
+                      children: [
+                        jsx(Codicon, { name: c === current ? 'check' : 'blank', size: '0.7rem' }, 'c'),
+                        jsx('span', { children: t('powerUpWith', powerName(st, c, t)) }, 'n')
+                      ]
+                    },
+                    c
+                  )
+                )
+              ]
+            })
+          ]
+        },
+        'menu'
+      )
+    ]
   })
 }
 
@@ -1435,7 +1531,7 @@ function SuggestionList({ id, onAfter }) {
             'data-power-active': '',
             className: 'flex items-center gap-1 text-[0.625rem]',
             style: { color: 'var(--ui-accent, var(--foreground))' },
-            children: [jsx(Codicon, { name: 'zap', size: '0.6rem' }, 'i'), t('powerActive', snap.settings.smartName || t('sgSmart'))]
+            children: [jsx(Codicon, { name: 'zap', size: '0.6rem' }, 'i'), t('powerActive', entry.power.by || powerName(snap.settings, null, t))]
           })
         : null,
       items.length
@@ -2433,11 +2529,8 @@ function SettingsPanel() {
       jsx(Row, {
         title: t('sSmart'),
         children: jsx(SegmentedControl, {
-          options: [
-            { id: 'lane', label: t('sSmartLane') },
-            { id: 'chat', label: t('sSmartChat') }
-          ],
-          value: st.smartModel,
+          options: POWER_CHOICES.map(c => ({ id: c, label: powerName(st, c, t) })),
+          value: st.smartModel === 'off' ? 'lane' : st.smartModel,
           onChange: v => patchSettings({ smartModel: v })
         })
       }),
@@ -2447,12 +2540,26 @@ function SettingsPanel() {
       }),
       jsx(Row, {
         title: t('sSmartName'),
-        children: jsx(Input, {
-          value: st.smartName,
-          placeholder: t('sgSmart'),
-          maxLength: 24,
-          style: { maxWidth: 160 },
-          onChange: e => patchSettings({ smartName: e.target.value })
+        children: jsxs('div', {
+          className: 'flex gap-1.5',
+          children: [
+            jsx(Input, {
+              value: st.smartName,
+              placeholder: t('pwSlot1'),
+              maxLength: 24,
+              style: { maxWidth: 130 },
+              'data-field': 'slot1',
+              onChange: e => patchSettings({ smartName: e.target.value })
+            }, 'a'),
+            jsx(Input, {
+              value: st.smartName2,
+              placeholder: t('pwSlot2'),
+              maxLength: 24,
+              style: { maxWidth: 130 },
+              'data-field': 'slot2',
+              onChange: e => patchSettings({ smartName2: e.target.value })
+            }, 'b')
+          ]
         })
       }),
       jsx('div', { className: 'pb-1 text-[0.625rem] text-(--ui-text-quaternary)', children: t('sSmartNote') }),

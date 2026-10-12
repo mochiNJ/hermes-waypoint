@@ -50,16 +50,23 @@ each with a reason, a priority and a ready-to-send message. It runs **only when 
 so your strong-model usage stays under your control. The ideas stay on screen until the chat
 moves on.
 
-Pick the power-up model like any other Hermes auxiliary model. With the Python half enabled it
-appears as **Waypoint big ideas**, or set it directly:
+**Choose the model with one click:** the arrow next to the button opens a menu with **Strong
+model 1**, **Strong model 2** and **My chat model** (the open session's own model). Picking one
+runs Power up right away and remembers it as the default.
+
+Strong models 1 and 2 are Hermes auxiliary tasks. With the Python half enabled they appear as
+**Waypoint power up (model 1/2)** in the auxiliary picker, or set them directly:
 
 ```bash
 hermes config set auxiliary.waypoint_ideas.provider anthropic
-hermes config set auxiliary.waypoint_ideas.model claude-sonnet-5-5
+hermes config set auxiliary.waypoint_ideas.model claude-opus-5-5
+hermes config set auxiliary.waypoint_ideas.reasoning_effort high
+hermes config set auxiliary.waypoint_ideas_2.provider anthropic
+hermes config set auxiliary.waypoint_ideas_2.model claude-sonnet-5-5
 ```
 
-If you leave it unset, it falls back to your cheap auxiliary model. In Board → Settings →
-*Power-up model* you can instead pick **My chat model**, the open session's own model (e.g. Opus).
+Then name them in Board → Settings (e.g. *Opus 5.5* and *Sonnet 5.5*). If you leave them unset,
+they fall back to your cheap auxiliary model.
 There is also an optional switch that adds one strong-model "big idea" automatically in the
 background, refreshed at most every 10 minutes; it is off by default.
 

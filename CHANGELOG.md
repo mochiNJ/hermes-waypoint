@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.0 — 2026-10-13
+- **Power up model menu:** the arrow next to ⚡ Power up lets you pick **Strong model 1**, **Strong
+  model 2** or **My chat model** with one click. Picking one runs Power up right away and remembers
+  it as the default. The two strong models are auxiliary tasks `waypoint_ideas` and
+  `waypoint_ideas_2`, so you can point them at e.g. Claude Opus 5.5 (with high reasoning) and
+  Claude Sonnet 5.5, and rename them in Settings.
+- More room for strong models that reason before answering.
+
 ## 2.3.0 — 2026-10-13
 - **⚡ Power up** button (in the status card and on the "Next:" row): when you feel stuck, it asks
   your strong model for **3 sharper ways to continue**, using a longer slice of the chat. It runs
