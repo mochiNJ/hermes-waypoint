@@ -1,4 +1,4 @@
 name: waypoint
-version: '2.1.0'
+version: '2.2.0'
 requires_hermes: '>=0.21.5'
 description: Status bars for your sessions - Working, Waiting on someone (with follow-up reminders), Done (fresh-start handoff). Status Board, triage, resume banner.

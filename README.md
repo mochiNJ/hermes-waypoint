@@ -42,6 +42,28 @@ above the message box (*Next: Confirm the 19 Oct ETA · Prepare the customs chec
 Turn AI ideas on from the card (**Turn on AI suggestions**) or in Board → Settings
 (*Off / Tracked sessions / All sessions*).
 
+### Big idea from a strong model (2.2)
+
+One of the three ideas always comes from a **strong model** and is marked with its name
+(e.g. ✦ Sonnet 5.5). It aims at the most valuable next move, not a chore. To keep usage low it
+refreshes at most every 10 minutes, and only after 4+ new messages (or when you press refresh).
+
+Pick its model like any other Hermes auxiliary model. With the Python half enabled it appears as
+**Waypoint big ideas**, or set it directly:
+
+```bash
+hermes config set auxiliary.waypoint_ideas.provider anthropic
+hermes config set auxiliary.waypoint_ideas.model claude-sonnet-5-5
+```
+
+If you leave it unset, it falls back to your cheap auxiliary model. In Board → Settings →
+*Big-idea model* you can also use **My chat model** (the open session's own model) or turn it **Off**.
+
+**Priority colours:** 🟢 important · 🟡 less important · 🔴 optional. Ideas are sorted by priority.
+
+**Mark complete:** the green button at the top of the status card turns the bar green and
+**stops suggestions** for that session. Choose Working to bring them back.
+
 ![Resume banner with suggestions](media/banner.png)
 
 ## Features
@@ -84,9 +106,11 @@ Turn AI ideas on from the card (**Turn on AI suggestions**) or in Board → Sett
   the durable session id, so statuses survive context compression.
 - **AI suggestions are off by default.** When you turn them on, Waypoint sends the
   last ~12 messages (trimmed, up to ~7,000 characters) of the session you have open,
-  plus its title and your notes, to your Hermes **auxiliary model** through Hermes's
-  own `llm.oneshot` call. It never uses your main chat model and never talks to any
-  other service. Quick suggestions never leave your computer.
+  plus its title and your notes, through Hermes's own `llm.oneshot` call: to your
+  cheap auxiliary model (`title_generation`), and to the `waypoint_ideas` model for
+  the one big idea, or to the session's own model if you pick *My chat model*. It
+  never talks to any other service. Quick suggestions never leave your computer.
+  Marking a session complete stops all suggestion calls for it.
 - **Nothing is sent to the agent.** Drafts (Ask, Insert, Start fresh session) are
   only placed in the chat box. You choose whether to send them.
 - No network calls of its own and no telemetry. The plugin uses only the official

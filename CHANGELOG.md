@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.2.0 — 2026-10-13
+- **Mark complete** button in the status card: turns the bar green and **stops suggestions** for
+  that session (cached ideas are cleared, no more model calls). Choose Working to bring them back.
+- **One big idea from a strong model.** Every suggestion set now includes one "big idea" written
+  by a strong model (badge with the model name), refreshed at most every 10 minutes and only after
+  4+ new messages, next to the cheap-model and quick ideas. The model is the auxiliary task
+  `waypoint_ideas` (pick e.g. Claude Sonnet 5.5 in Hermes), or optionally the session's own model.
+- **Priority colours:** green = important, yellow = less important, red = optional, on every idea
+  in the card and on the "Next:" chips. Ideas are ordered by priority.
+
 ## 2.1.0 — 2026-10-13
 - **Suggested next steps.** Every session gets 3 ideas for what to do next, shown in the status
   card and as one-click chips above the message box ("Next: …").
