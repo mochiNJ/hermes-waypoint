@@ -1,6 +1,25 @@
 # Changelog
 
-## 2.4.0 — 2026-10-13
+## 2.5.0 — 2026-10-12
+- **Power up call log.** Each Power up call (strong model 1 or 2) now writes one line to the Hermes
+  log (`logs/agent.log`, logger `plugins.waypoint`), for example:
+  `Waypoint power-up call: task=waypoint_ideas model=claude-opus-5-5 effort=high (configured=high)
+  time=11.70s tokens in=3648 out=991 (incl. thinking) total=4639 finish=stop status=ok`.
+  It also adds one JSON record to `<HERMES_HOME>/plugin-data/waypoint/power-calls.jsonl`, which rolls
+  over at about 1 MB and keeps one previous file. Each line has the model, the reasoning effort (as
+  configured and as sent), the response time, token counts, the finish reason and success or
+  error. **Your messages and the ideas are never logged.** It uses Hermes's public
+  `pre_auxiliary_call` / `post_auxiliary_call` hooks and only reads the call; it never changes it.
+- **`tokens unknown` instead of a misleading 0.** Some Hermes versions don't pass token counts to
+  plugins for every provider. Today that includes the Anthropic route of auxiliary tasks, where
+  the counts arrive as 0. When there are no usable counts, Waypoint logs `tokens unknown`, adds a
+  `tokens_reason` to the record (for example `Hermes reported 0 tokens`, `Hermes reported no
+  usage`, `call failed`), and writes **one** WARNING per Hermes start explaining why. Model,
+  effort and time are always logged. Real counts appear automatically once Hermes reports them.
+- "My chat model" Power up calls go through the session's own model, outside the auxiliary tasks,
+  so they aren't in this log.
+
+## 2.4.0 — 2026-10-12
 - **Power up model menu:** the arrow next to ⚡ Power up lets you pick **Strong model 1**, **Strong
   model 2** or **My chat model** with one click. Picking one runs Power up right away and remembers
   it as the default. The two strong models are auxiliary tasks `waypoint_ideas` and
@@ -8,7 +27,7 @@
   Claude Sonnet 5.5, and rename them in Settings.
 - More room for strong models that reason before answering.
 
-## 2.3.0 — 2026-10-13
+## 2.3.0 — 2026-10-12
 - **⚡ Power up** button (in the status card and on the "Next:" row): when you feel stuck, it asks
   your strong model for **3 sharper ways to continue**, using a longer slice of the chat. It runs
   only when you press it. The ideas replace the list until the chat moves on.
@@ -17,7 +36,7 @@
   model** (the open session's own model, e.g. Opus).
 - Prompts keep JSON keys in English so Arabic replies always parse.
 
-## 2.2.0 — 2026-10-13
+## 2.2.0 — 2026-10-12
 - **Mark complete** button in the status card: turns the bar green and **stops suggestions** for
   that session (cached ideas are cleared, no more model calls). Choose Working to bring them back.
 - **One big idea from a strong model.** Every suggestion set now includes one "big idea" written
@@ -27,7 +46,7 @@
 - **Priority colours:** green = important, yellow = less important, red = optional, on every idea
   in the card and on the "Next:" chips. Ideas are ordered by priority.
 
-## 2.1.0 — 2026-10-13
+## 2.1.0 — 2026-10-12
 - **Suggested next steps.** Every session gets 3 ideas for what to do next, shown in the status
   card and as one-click chips above the message box ("Next: …").
   - **Quick** ideas are instant and free: they come from offers the assistant just made

@@ -70,6 +70,19 @@ they fall back to your cheap auxiliary model.
 There is also an optional switch that adds one strong-model "big idea" automatically in the
 background, refreshed at most every 10 minutes; it is off by default.
 
+**Power up log:** each Power up call on strong model 1 or 2 writes one line to the Hermes log
+(`logs/agent.log`) with the model, reasoning effort, response time and token counts:
+
+```
+Waypoint power-up call: task=waypoint_ideas model=claude-opus-5-5 effort=high (configured=high) time=11.70s tokens in=3648 out=991 (incl. thinking) total=4639 finish=stop status=ok
+```
+
+It also adds a record to `plugin-data/waypoint/power-calls.jsonl` in your Hermes folder (capped at
+about 1 MB). Your messages and the ideas are never logged. If your Hermes version doesn't pass
+token counts to plugins for your provider (today: the Anthropic route of auxiliary tasks), the line
+says `tokens unknown` and one warning explains why, rather than showing a misleading 0. This needs
+the Python half enabled.
+
 **Priority colours:** 🟢 important · 🟡 less important · 🔴 optional. Ideas are sorted by priority.
 
 **Mark complete:** the green button at the top of the status card turns the bar green and
@@ -122,12 +135,18 @@ background, refreshed at most every 10 minutes; it is off by default.
   the one big idea, or to the session's own model if you pick *My chat model*. It
   never talks to any other service. Quick suggestions never leave your computer.
   Marking a session complete stops all suggestion calls for it.
+- **Power up log (Python half):** one line per Power up call in your own Hermes log plus a local
+  record file (`plugin-data/waypoint/power-calls.jsonl`, about 1 MB max): model, effort, time, token
+  counts and status only, **never your messages or the ideas**. It stays on your computer. Delete
+  the file any time.
 - **Nothing is sent to the agent.** Drafts (Ask, Insert, Start fresh session) are
   only placed in the chat box. You choose whether to send them.
 - No network calls of its own and no telemetry. The plugin uses only the official
   Desktop plugin SDK: session-row slots, a route, sidebar nav, status bar, composer
   banner, palette, notifications, and the `session.list`, `session.archive`,
-  `session.history` and (opt-in) `llm.oneshot` gateway calls.
+  `session.history` and (opt-in) `llm.oneshot` gateway calls. The Python half
+  registers two auxiliary tasks and two observe-only hooks (`pre_auxiliary_call`,
+  `post_auxiliary_call`) for the log above.
 
 ## Install
 

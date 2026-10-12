@@ -53,7 +53,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 
 export const ID = 'waypoint' // never change: storage is namespaced by it
-export const VERSION = '2.4.0'
+export const VERSION = '2.5.0'
 // Build flag: the local install turns AI suggestions on for tracked sessions; public builds
 // ship with them off until the user opts in (they send an excerpt to the auxiliary model).
 export const DEFAULT_AI = 'off'
