@@ -865,13 +865,24 @@ function fmtDate(ms) {
 
 async function refreshTitles() {
   try {
-    const res = await host.request('session.list', { limit: 300 })
-    const rows = res?.sessions || []
+    const res = await host.request('session.list', { limit: 200 })
+    let rows = res?.sessions || []
+    // Current gateways separate live chats from saved picker history.
+    try {
+      const stored = await host.request('session.list', { limit: 200, scope: 'stored' })
+      rows = rows.concat(stored?.sessions || [])
+    } catch {
+      // Older gateways may not support stored scope; keep the live names.
+    }
     const map = {}
     const order = []
+    const seen = new Set()
     for (const r of rows) {
       const durable = r._lineage_root_id || r.id
-      if (!map[durable]) order.push(durable)
+      if (!seen.has(durable)) {
+        seen.add(durable)
+        order.push(durable)
+      }
       map[durable] = r.title || map[durable] || ''
       map[r.id] = map[r.id] || r.title || ''
     }
@@ -1654,7 +1665,7 @@ function StatusCard({ id, onClose }) {
     }
   }
 
-  const title = titles[id]
+  const title = titles[id] || id
   return jsxs('div', {
     ...SWALLOW,
     onKeyDown: onKey,
@@ -2116,7 +2127,7 @@ function BoardItem({ id, t, snap, titles, now }) {
   const m = snap.meta[id] || {}
   const due = s === 'waiting' && isDue(w, now)
   const stale = isStale(snap, id, now)
-  const title = titles[id] || t('untitled')
+  const title = titles[id] || id
   const sub =
     s === 'waiting'
       ? [w?.who ? t('waitingOn', w.who) : t('waitingSomeone'), w?.remindAt ? (due ? t('followUpNow') : t('reminderAt', fmtDate(w.remindAt))) : '']
@@ -2404,8 +2415,8 @@ function Board() {
                             type: 'button',
                             className: 'min-w-0 flex-1 truncate text-left text-foreground',
                             onClick: () => openSession(id),
-                            title: titles[id] || t('untitled'),
-                            children: titles[id] || t('untitled')
+                            title: titles[id] || id,
+                            children: titles[id] || id
                           }),
                           ...['wip', 'waiting', 'done'].map(x =>
                             jsxs(
