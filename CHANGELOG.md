@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+- **Fix: Status Board showed "Untitled session" for every card on newer Hermes desktops.** Gateways
+  with a session authority (the desktop's native local dial, Hermes 0.23+) refuse `session.list`
+  with `limit` above 200, and only list live sessions unless `scope: 'stored'` is passed. Waypoint
+  asked for 300 and swallowed the refusal, so no titles ever loaded. Titles now load with
+  `limit: 200`, closed sessions come from the stored feed (paged), fetched titles are merged into
+  the known ones instead of replacing them, and a failed call logs `[waypoint] session.list failed`
+  in the console instead of failing silently.
+
 ## 2.5.0 — 2026-10-12
 - **Power up call log.** Each Power up call (strong model 1 or 2) now writes one line to the Hermes
   log (`logs/agent.log`, logger `plugins.waypoint`), for example:

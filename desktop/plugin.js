@@ -863,23 +863,53 @@ function fmtDate(ms) {
 
 // ---- sessions: titles + navigation + archive + fresh start -----------------
 
-async function refreshTitles() {
+// Gateways with a session authority (desktop native dial, Hermes >= 0.23) refuse
+// `limit` > 200 with invalid_params and list only live sessions unless scope='stored'.
+// Ask for <= 200, page the stored feed there, and merge into the known titles so one
+// failed refresh (or a connection switch) never blanks the board.
+async function listSessionsSafe(params) {
   try {
-    const res = await host.request('session.list', { limit: 300 })
-    const rows = res?.sessions || []
-    const map = {}
-    const order = []
-    for (const r of rows) {
-      const durable = r._lineage_root_id || r.id
-      if (!map[durable]) order.push(durable)
-      map[durable] = r.title || map[durable] || ''
-      map[r.id] = map[r.id] || r.title || ''
-    }
-    $titles.set(map)
-    $recent.set(order)
-  } catch {
-    // Older gateway or offline: titles just stay unknown.
+    return await host.request('session.list', params)
+  } catch (e) {
+    console.warn('[waypoint] session.list failed', params, e)
+    return null
   }
+}
+
+async function refreshTitles() {
+  const rows = []
+  const live = await listSessionsSafe({ limit: 200 })
+  if (live?.sessions) rows.push(...live.sessions)
+  // Authority gateways only: closed sessions live in the stored feed (legacy ignores/refuses scope).
+  if (live?.scope === 'live') {
+    let cursor = null
+    for (let page = 0; page < 5; page++) {
+      const res = await listSessionsSafe(cursor ? { limit: 200, scope: 'stored', cursor } : { limit: 200, scope: 'stored' })
+      if (!res?.sessions) break
+      rows.push(...res.sessions)
+      cursor = res.next_cursor
+      if (!cursor) break
+    }
+  }
+  if (!rows.length) return // offline / refused: keep the last known titles
+  const map = { ...$titles.get() }
+  const order = []
+  const seen = new Set()
+  for (const r of rows) {
+    const durable = r._lineage_root_id || r.id || r.session_id
+    if (!durable) continue
+    if (!seen.has(durable)) {
+      seen.add(durable)
+      order.push(durable)
+    }
+    if (r.title) {
+      for (const k of [durable, r.id, r.session_id, r.resolved_id]) if (k) map[k] = r.title
+    } else if (!(durable in map)) {
+      map[durable] = ''
+    }
+  }
+  $titles.set(map)
+  $recent.set(order)
 }
 
 const $recent = atom([]) // durable ids, most recent first (from session.list)
